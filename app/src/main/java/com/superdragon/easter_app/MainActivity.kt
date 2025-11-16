@@ -1,5 +1,6 @@
 package com.superdragon.easter_app
 
+import android.content.Context
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -8,26 +9,35 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +61,40 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import com.superdragon.easter_app.ui.theme.EasterappTheme
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+@Serializable
+data class PhrasesData(val phrases: List<String> = emptyList())
+
+object PhrasesStorage {
+    private const val PREFS_NAME = "phrases_storage"
+    private const val PREFS_KEY = "discovered_phrases"
+
+    fun savePhrases(context: Context, phrases: List<String>) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val data = PhrasesData(phrases)
+        val json = Json.encodeToString(data)
+        prefs.edit().putString(PREFS_KEY, json).apply()
+    }
+
+    fun loadPhrases(context: Context): List<String> {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val json = prefs.getString(PREFS_KEY, null) ?: return emptyList()
+        return try {
+            val data = Json.decodeFromString<PhrasesData>(json)
+            data.phrases
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    fun clearPhrases(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().remove(PREFS_KEY).apply()
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -67,6 +111,12 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen() {
     var selectedTab by remember { mutableStateOf(0) }
+    var discoveredPhrases by remember { mutableStateOf<List<String>>(emptyList()) }
+    val context = LocalContext.current
+
+    LaunchedEffect(Unit) {
+        discoveredPhrases = PhrasesStorage.loadPhrases(context)
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -88,14 +138,32 @@ fun MainScreen() {
         }
     ) { innerPadding ->
         when (selectedTab) {
-            0 -> Greeting(modifier = Modifier.padding(innerPadding))
-            1 -> SecondScreen(modifier = Modifier.padding(innerPadding))
+            0 -> Greeting(
+                modifier = Modifier.padding(innerPadding),
+                onPhrasDiscovered = { phrase ->
+                    if (!discoveredPhrases.contains(phrase)) {
+                        discoveredPhrases = discoveredPhrases + phrase
+                        PhrasesStorage.savePhrases(context, discoveredPhrases)
+                    }
+                }
+            )
+            1 -> SecondScreen(
+                modifier = Modifier.padding(innerPadding),
+                phrases = discoveredPhrases,
+                onClearData = {
+                    discoveredPhrases = emptyList()
+                    PhrasesStorage.clearPhrases(context)
+                }
+            )
         }
     }
 }
 
 @Composable
-fun Greeting(modifier: Modifier = Modifier) {
+fun Greeting(
+    modifier: Modifier = Modifier,
+    onPhrasDiscovered: (String) -> Unit = {}
+) {
     var inputText by remember { mutableStateOf("") }
     var showDialog by remember { mutableStateOf(false) }
     var userName by remember { mutableStateOf("") }
@@ -146,8 +214,11 @@ fun Greeting(modifier: Modifier = Modifier) {
         Button(onClick = {
             keyboardController?.hide()
             focusRequester.freeFocus()
-            when (inputText.trim().lowercase()) {
+            val trimmedInput = inputText.trim().lowercase()
+            
+            when (trimmedInput) {
                 "hello" -> {
+                    onPhrasDiscovered("hello")
                     userName = Settings.Secure.getString(
                         context.contentResolver,
                         "bluetooth_name"
@@ -158,9 +229,11 @@ fun Greeting(modifier: Modifier = Modifier) {
                     showDialog = true
                 }
                 "author" -> {
+                    onPhrasDiscovered("author")
                     showAuthorDialog = true
                 }
                 "exit" -> {
+                    onPhrasDiscovered("exit")
                     (context as? ComponentActivity)?.finish()
                 }
             }
@@ -222,18 +295,166 @@ fun Greeting(modifier: Modifier = Modifier) {
     }
 }
 
+fun getPhraseDescription(phrase: String): String {
+    return when (phrase.lowercase()) {
+        "hello" -> "Greeting command that displays a welcome message with your device name and Android greeting."
+        "author" -> "Shows information about the developer of this application."
+        "exit" -> "Closes the application and returns to the home screen."
+        else -> "Unknown command"
+    }
+}
+
 @Composable
-fun SecondScreen(modifier: Modifier = Modifier) {
+fun SecondScreen(
+    modifier: Modifier = Modifier,
+    phrases: List<String> = emptyList(),
+    onClearData: () -> Unit = {},
+    onDeletePhrase: (String) -> Unit = {}
+) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showConfirmDialog by remember { mutableStateOf(false) }
+    var selectedPhrase by remember { mutableStateOf<String?>(null) }
+    var showPhraseDialog by remember { mutableStateOf(false) }
+
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        modifier = modifier.fillMaxSize()
     ) {
-        Text("Words", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(16.dp))
-        Text("This is the words tab")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Words", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            
+            Box {
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "Menu"
+                    )
+                }
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Clear Data") },
+                        onClick = {
+                            showMenu = false
+                            showConfirmDialog = true
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        if (phrases.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text("No words discovered yet", fontSize = 16.sp)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(phrases) { phrase ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selectedPhrase = phrase
+                                showPhraseDialog = true
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = phrase,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showConfirmDialog = false },
+            title = { Text("Clear Data") },
+            text = { Text("Are you sure you want to delete all words?") },
+            confirmButton = {
+                Button(onClick = {
+                    onClearData()
+                    showConfirmDialog = false
+                }) {
+                    Text("Yes")
+                }
+            },
+            dismissButton = {
+                Button(onClick = { showConfirmDialog = false }) {
+                    Text("No")
+                }
+            }
+        )
+    }
+
+    if (showPhraseDialog && selectedPhrase != null) {
+        AlertDialog(
+            onDismissRequest = { showPhraseDialog = false },
+            title = { Text("«${selectedPhrase}»") },
+            text = {
+                Column {
+                    Text(
+                        text = "Description:",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = getPhraseDescription(selectedPhrase!!),
+                        fontSize = 14.sp
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showPhraseDialog = false }) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = {
+                        onDeletePhrase(selectedPhrase!!)
+                        showPhraseDialog = false
+                    },
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = androidx.compose.material3.MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Delete")
+                }
+            }
+        )
     }
 }
 
